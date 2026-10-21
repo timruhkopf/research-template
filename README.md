@@ -37,7 +37,7 @@ git --version                                       # >= 2.31 recommended (Ubunt
 ```bash
 uvx copier copy --trust ~/PycharmProjects/research-template ~/PycharmProjects/my-project   # answer the questions
 cd ~/PycharmProjects/my-project
-git init -b main && just setup cpu local            # venv (cpu torch), git hooks, .env from envs/local.env.example
+git init && git checkout -q -b main && just setup cpu local   # venv (cpu torch), git hooks, .env from envs/local.env.example
 git add -A && git commit -m "Start from research-template"     # uv.lock included: tracked runs need a clean tree
 gh repo create <user>/my-project --private --source . --push   # GitHub remote
 just github-init                                    # issue labels: idea, experiment, infra, bug
