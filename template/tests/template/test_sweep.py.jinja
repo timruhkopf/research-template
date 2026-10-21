@@ -115,3 +115,14 @@ def test_slurm_submission(runs_root: Path, root: Path, tmp_path: Path, monkeypat
     assert "--array=0,2%16" in args and args.rstrip().endswith(f"member {d}")
     assert (d / "slurm_jobs.txt").read_text().startswith("4242 member 0,2")
 [% endif %]
+
+
+def test_start_time() -> None:
+    import datetime as dt
+
+    now = dt.datetime.now()
+    soon = sweep.start_time(f"{(now + dt.timedelta(minutes=5)):%H:%M}")
+    assert dt.timedelta(minutes=3) < soon - now < dt.timedelta(minutes=6)  # later today
+    earlier = sweep.start_time(f"{(now - dt.timedelta(minutes=5)):%H:%M}")
+    assert dt.timedelta(hours=23) < earlier - now < dt.timedelta(hours=24)  # already past: tomorrow
+    assert sweep.start_time("2030-01-02T03:04") == dt.datetime(2030, 1, 2, 3, 4)
