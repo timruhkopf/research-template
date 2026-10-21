@@ -39,3 +39,10 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+      - id: running-sweeps
+        name: running sweeps after a pull
+        entry: uv run --no-sync python -m [[ package_name ]].tracking.cli notify-merge
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [post-merge]

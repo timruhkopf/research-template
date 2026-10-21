@@ -20,12 +20,29 @@ setup extra setup="local":
     uv sync --extra {{extra}} {{ if setup == "local" { "--group notebooks" } else { "" } }}
     [ -f .env ] || cp envs/{{setup}}.env.example .env
     grep -q '^[[ package_name|upper ]]_TORCH_EXTRA=' .env || echo '[[ package_name|upper ]]_TORCH_EXTRA={{extra}}' >> .env
-    {{ if setup == "local" { "uv run --extra " + extra + " pre-commit install --hook-type pre-commit --hook-type pre-push" } else { "true" } }}
+    uv run --extra {{extra}} pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type post-merge
+    git config push.followTags true
 
 # switch the active machine settings (.env) to envs/<setup>.env.example
 use-env setup:
     cp envs/{{setup}}.env.example .env
     echo '[[ package_name|upper ]]_TORCH_EXTRA={{extra}}' >> .env
+
+# where the repo stands and what to do next (also shown to Claude at session start)
+status:
+    {{cli}} status
+
+# update this checkout (default: fast-forward to upstream), guarding running sweeps: just sync-code [ref] [force=1]
+sync-code ref="@{u}" force="":
+    git fetch --quiet
+    {{cli}} sync-code {{ref}} {{ if force != "" { "--force" } else { "" } }}
+
+# once per GitHub repo: labels used by the issue templates
+github-init:
+    -gh label create idea --color FBCA04 --description "an idea, not yet an experiment"
+    -gh label create experiment --color 0E8A16 --description "a question with a GO/NO-GO criterion"
+    -gh label create infra --color 1D76DB --description "tooling, pipelines, refactors"
+    -gh label create bug --color D73A4A --description "something is wrong" --force
 
 # tiny end-to-end scratch run
 smoke:
@@ -111,20 +128,26 @@ figures:
 [% if "remote" in compute %]
 
 # --- remote box ([[ package_name|upper ]]_REMOTE_HOST / _REMOTE_DIR in .env) ---------------------------
+# Code moves by git over ssh (no GitHub credentials needed on the box); sweeps there run from frozen
+# worktrees, so a push never breaks them. Only dependency changes under active sweeps need force=1.
 
-# rsync code incl. .git to the remote (the remote tree must be a clean commit for tracked runs)
-push:
-    rsync -az --delete --exclude .venv --exclude runs --exclude data --exclude checkpoints --exclude .env \
-        --exclude .env.secrets --exclude __pycache__ --exclude .idea --exclude mlflow.db ./ {{remote_host}}:{{remote_dir}}/
+# put the committed HEAD on the box and check it out there: just push [force=1]
+push force="":
+    git -c push.default=current push --quiet --force {{remote_host}}:{{remote_dir}} HEAD:refs/heads/incoming
+    ssh {{remote_host}} "cd {{remote_dir}} && .venv/bin/python -m [[ package_name ]].tracking.cli sync-code incoming {{ if force != "" { "--force" } else { "" } }}"
 
-# rsync one experiment's runs back: just pull <experiment>
+# runs of one experiment back, plus the sweep tags created on the box: just pull <experiment>
 pull experiment:
     mkdir -p runs/{{experiment}}
-    rsync -az {{remote_host}}:{{remote_dir}}/runs/{{experiment}}/ runs/{{experiment}}/
+    rsync -az --exclude .code {{remote_host}}:{{remote_dir}}/runs/{{experiment}}/ runs/{{experiment}}/
+    git fetch --quiet {{remote_host}}:{{remote_dir}} 'refs/tags/sweep/*:refs/tags/sweep/*'
+    @echo "back up the sweep tags: git push --tags"
 
-# once per dependency change: sync the remote venv (extra defaults to [[ cuda_extra ]])
+# first time / dependency changes: repo, venv and .env on the box (extra defaults to [[ cuda_extra ]])
 remote-setup extra="[[ cuda_extra ]]":
-    ssh {{remote_host}} 'cd {{remote_dir}} && PATH=$HOME/.local/bin:$PATH uv sync --extra {{extra}} && ([ -f .env ] || cp envs/remote.env.example .env) && (grep -q TORCH_EXTRA .env || echo [[ package_name|upper ]]_TORCH_EXTRA={{extra}} >> .env)'
+    ssh {{remote_host}} 'mkdir -p {{remote_dir}} && cd {{remote_dir}} && ([ -d .git ] || git init -q)'
+    git -c push.default=current push --quiet --force {{remote_host}}:{{remote_dir}} HEAD:refs/heads/incoming
+    ssh {{remote_host}} 'cd {{remote_dir}} && git checkout -q --detach incoming && PATH=$HOME/.local/bin:$PATH uv sync --extra {{extra}} && ([ -f .env ] || cp envs/remote.env.example .env) && (grep -q TORCH_EXTRA .env || echo [[ package_name|upper ]]_TORCH_EXTRA={{extra}} >> .env)'
 
 # run a cli command on the remote, e.g. just remote sweep detached pilot experiment=x seed=0,1,2
 remote *args:

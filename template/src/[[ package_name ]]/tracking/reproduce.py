@@ -7,20 +7,17 @@ so a fresh clone can reproduce reported numbers.
 import datetime as dt
 import json
 import math
-import os
 import shutil
 import subprocess
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from ..utils.env import repo_root, runs_root, var
-from .provenance import git
+from ..utils.env import runs_root, var
 from .sink import read_run
-from .sweep import execute, jobs, read_sweep
+from .sweep import ensure_code, execute, jobs, read_sweep
 
 
 def _missing(value: object) -> bool:
@@ -50,30 +47,22 @@ def reproduce(
     if meta.get("allow_dirty"):
         raise ValueError(f"{meta['id']} ran with uncommitted changes; it cannot be reproduced from a commit")
     stamp = f"{dt.datetime.now():%Y%m%d-%H%M%S}"
-    worktree = runs_root() / "_reproduce" / f"{meta['id']}_{stamp}"
-    git(repo_root(), "worktree", "add", "--detach", str(worktree), meta["tag"] or meta["commit"])
-    try:
-        env = dict(os.environ)
-        if sync:
-            extra = var("TORCH_EXTRA") or "cpu"
-            subprocess.run(["uv", "sync", "--frozen", "--extra", extra], cwd=worktree, check=True)
-            python = str(worktree / ".venv" / "bin" / "python")
-        else:  # reuse this environment, import the package from the worktree
-            python = sys.executable
-            env["PYTHONPATH"] = str(worktree / "src")
-
-        new_dir = runs_root() / meta["experiment"] / f"{meta['id']}_repro_{stamp}"
-        new_dir.mkdir(parents=True)
-        (new_dir / "sweep.json").write_text(
-            json.dumps(
-                meta | {"id": new_dir.name, "reproduces": meta["id"], "command": f"just reproduce {source}"},
-                indent=1,
-            )
+    new_dir = runs_root() / meta["experiment"] / f"{meta['id']}_repro_{stamp}"
+    new_dir.mkdir(parents=True)
+    (new_dir / "sweep.json").write_text(
+        json.dumps(
+            meta | {"id": new_dir.name, "reproduces": meta["id"], "command": f"just reproduce {source}"}, indent=1
         )
-        shutil.copy2(plan_dir / "jobs.jsonl", new_dir / "jobs.jsonl")
-        execute(new_dir, members or sorted(reference), python=python, cwd=worktree, env=env)
-    finally:
-        git(repo_root(), "worktree", "remove", "--force", str(worktree))
+    )
+    shutil.copy2(plan_dir / "jobs.jsonl", new_dir / "jobs.jsonl")
+    code = ensure_code(new_dir)  # a worktree at the sweep's commit
+    assert code is not None
+    python = None  # reuse this venv; the package is imported from the worktree
+    if sync:  # the environment of that commit, too
+        extra = var("TORCH_EXTRA") or "cpu"
+        subprocess.run(["uv", "sync", "--frozen", "--extra", extra, "--no-dev"], cwd=code, check=True)
+        python = str(code / ".venv" / "bin" / "python")
+    execute(new_dir, members or sorted(reference), python=python)
 
     ok = True
     for member in members or sorted(reference):

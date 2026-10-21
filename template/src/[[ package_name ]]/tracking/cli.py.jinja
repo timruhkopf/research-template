@@ -14,6 +14,7 @@ import pandas as pd
 from ..utils.env import load_dotenv, repo_root[% if mlflow %], runs_root[% endif +%]
 from . import logbook, sweep
 from .backends import BACKENDS, launch
+from .codesync import SyncRefused
 from .provenance import DirtyTreeError
 
 
@@ -41,6 +42,7 @@ def cmd_run(a: argparse.Namespace) -> None:
 
 def cmd_status(a: argparse.Namespace) -> None:
     st = sweep.status(a.sweep_dir)
+    sweep.release_code(a.sweep_dir)
     for i, s in st.items():
         print(f"{i:>4}  {s:8}  {' '.join(sweep.jobs(a.sweep_dir)[i])}")
     print(sweep.counts(a.sweep_dir))
@@ -83,6 +85,24 @@ def cmd_decide(a: argparse.Namespace) -> None:
     meta = sweep.read_sweep(a.sweep_dir)
     entry = logbook.decide(a.root / "research_log", meta, sweep.counts(a.sweep_dir), a.verdict, a.reason)
     print(f"recorded {a.verdict} for {meta['id']} in {entry.path}")
+
+
+def cmd_workflow(a: argparse.Namespace) -> None:
+    from .workflow import report
+
+    print(report(brief=a.brief))
+
+
+def cmd_sync_code(a: argparse.Namespace) -> None:
+    from .codesync import sync_code
+
+    sync_code(a.ref, force=a.force)
+
+
+def cmd_notify_merge(a: argparse.Namespace) -> None:
+    from .codesync import notify_after_merge
+
+    notify_after_merge()
 
 
 def cmd_log_index(a: argparse.Namespace) -> None:
@@ -221,6 +241,17 @@ def parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_decide)
 
     sub.add_parser("log-index", help="regenerate research_log/README.md").set_defaults(func=cmd_log_index)
+
+    s = sub.add_parser("status", help="where the repo stands and the next workflow steps")
+    s.add_argument("--brief", action="store_true")
+    s.set_defaults(func=cmd_workflow)
+
+    s = sub.add_parser("sync-code", help="move this checkout to a ref, guarding running sweeps")
+    s.add_argument("ref", nargs="?", default="@{u}", help="commit/branch, or @{u} to fast-forward (default)")
+    s.add_argument("--force", action="store_true", help="also when dependencies change under active sweeps")
+    s.set_defaults(func=cmd_sync_code)
+
+    sub.add_parser("notify-merge", help="post-merge hook: report active sweeps").set_defaults(func=cmd_notify_merge)
     sub.add_parser("refs-check", help="references.md and .bib agree").set_defaults(func=cmd_refs_check)
 
     s = sub.add_parser("reproduce", help="rerun a sweep at its commit and compare")
@@ -272,7 +303,7 @@ def main(argv: list[str] | None = None) -> None:
         p.error(f"unrecognized arguments: {' '.join(extra)}")
     try:
         args.func(args)
-    except (logbook.GateError, DirtyTreeError, FileExistsError) as e:  # refusals by design: no traceback
+    except (logbook.GateError, DirtyTreeError, FileExistsError, SyncRefused) as e:  # refusals by design: no traceback
         sys.exit(f"refused: {e}")
 
 

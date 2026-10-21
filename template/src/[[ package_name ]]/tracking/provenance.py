@@ -71,4 +71,9 @@ def require_clean(repo: Path | None = None) -> GitState:
 
 
 def tag(name: str, commit: str, repo: Path | None = None) -> None:
-    git(repo or repo_root(), "tag", name, commit)
+    """Annotated, so `git push` carries it (push.followTags, set by `just setup`)."""
+    repo = repo or repo_root()
+    identity = []
+    if subprocess.run(["git", "-C", str(repo), "config", "user.email"], capture_output=True).returncode != 0:
+        identity = ["-c", "user.name=sweep", "-c", "user.email=sweep@localhost"]  # e.g. a GPU box without git identity
+    subprocess.check_output(["git", *identity, "-C", str(repo), "tag", "-a", "-m", f"sweep {name}", name, commit])

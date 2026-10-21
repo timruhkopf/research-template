@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ..utils.env import PACKAGE, repo_root
-from .sweep import execute, status
+from .sweep import ensure_code, execute, status
 
 BACKENDS = ("local", "detached", "slurm")
 
@@ -26,6 +26,7 @@ def launch(
     max_parallel: int = 16,
 ) -> None:
     """Grid sweeps run `members` (default: all not DONE); optuna sweeps start `workers` workers."""
+    ensure_code(sweep_dir)  # here, once, not in every array element
     optuna = (sweep_dir / "study.journal").exists()
     if backend == "local":
         if optuna:

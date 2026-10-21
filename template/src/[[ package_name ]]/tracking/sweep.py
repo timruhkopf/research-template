@@ -6,11 +6,16 @@ runs/<experiment>/<stage>_<YYYYMMDD-HHMMSS>/
 └── <i>/            one member: Hydra run dir with the run sink and DONE | FAILED
 
 No process has to stay alive: all state is in the directory, and members are idempotent.
+
+Members run from `<sweep dir>/.code`, a git worktree at the sweep's commit, so pulling or pushing code
+while a sweep is queued neither crashes nor changes it. Only dependency changes (the shared .venv) can;
+`sync_code` guards against those.
 """
 
 import datetime as dt
 import itertools
 import json
+import os
 import signal
 import socket
 import subprocess
@@ -22,9 +27,9 @@ from typing import Any
 
 from hydra.core.override_parser.overrides_parser import OverridesParser
 
-from ..utils.env import PACKAGE, runs_root
+from ..utils.env import PACKAGE, PREFIX, repo_root, runs_root, var
 from .logbook import check_gate
-from .provenance import git_state, require_clean, tag
+from .provenance import git, git_state, require_clean, tag
 from .sink import member_status
 
 
@@ -108,7 +113,28 @@ def plan(
         add_job(sweep_dir, i, job)
     if tag_name:
         tag(tag_name, state.commit)  # keeps the commit reachable whatever happens to branches
+    ensure_code(sweep_dir)
     return sweep_dir
+
+
+def ensure_code(sweep_dir: Path) -> Path | None:
+    """The sweep's frozen code (a worktree at its commit); None for --allow-dirty sweeps, which run the
+    working tree. Created by single-process callers only (plan, launch, execute), never by array elements."""
+    meta = read_sweep(sweep_dir)
+    if meta.get("allow_dirty"):
+        return None
+    code = sweep_dir / ".code"
+    if not (code / ".git").exists():
+        git(repo_root(), "worktree", "prune")
+        git(repo_root(), "worktree", "add", "--detach", "--quiet", str(code), meta["commit"])
+    return code
+
+
+def release_code(sweep_dir: Path) -> None:
+    """Remove the worktree once every member is DONE (resume recreates it if ever needed)."""
+    code = sweep_dir / ".code"
+    if code.exists() and set(status(sweep_dir).values()) == {"DONE"}:
+        git(repo_root(), "worktree", "remove", "--force", str(code))
 
 
 def status(sweep_dir: Path) -> dict[int, str]:
@@ -136,9 +162,23 @@ def member_command(sweep_dir: Path, member: int, python: str | None = None) -> l
 def run_member(
     sweep_dir: Path, member: int, python: str | None = None, cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> int:
-    """Run one member in a subprocess; forwards SIGUSR1 (SLURM preemption warning) to it."""
+    """Run one member in a subprocess, from the sweep's frozen code; forwards SIGUSR1 (SLURM preemption
+    warning) to it."""
     out = sweep_dir / str(member)
     out.mkdir(exist_ok=True)
+    env = dict(env or os.environ)
+    code = sweep_dir / ".code"
+    if not read_sweep(sweep_dir).get("allow_dirty"):
+        if not (code / ".git").exists():
+            raise RuntimeError(f"{code} is missing; `just sweep-resume {sweep_dir}` recreates it")
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(code / "src"), env.get("PYTHONPATH")]))
+        cwd = cwd or code
+        for name, default in (
+            ("RUNS_ROOT", runs_root()),
+            ("DATA_ROOT", repo_root() / "data"),
+            ("CKPT_ROOT", repo_root() / "checkpoints"),
+        ):
+            env.setdefault(f"{PREFIX}_{name}", str(var(name) or default))  # not the worktree's empty dirs
     with (out / "stdout.log").open("a") as log:
         proc = subprocess.Popen(
             member_command(sweep_dir, member, python), stdout=log, stderr=subprocess.STDOUT, cwd=cwd, env=env
@@ -158,8 +198,10 @@ def execute(
     env: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """Run members that are not DONE, one after another (local and detached backends)."""
+    ensure_code(sweep_dir)
     todo = [i for i, s in status(sweep_dir).items() if s != "DONE" and (members is None or i in members)]
     for i in todo:
         rc = run_member(sweep_dir, i, python, cwd, env)
         print(f"{dt.datetime.now():%F %T} member {i}: {member_status(sweep_dir / str(i))} (rc={rc})", flush=True)
+    release_code(sweep_dir)
     return counts(sweep_dir)
