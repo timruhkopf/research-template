@@ -51,3 +51,22 @@ def test_tag_created(git_repo: Path) -> None:
     tag("sweep/exp/pilot_1", commit, git_repo)
     out = subprocess.check_output(["git", "-C", str(git_repo), "rev-list", "-n1", "sweep/exp/pilot_1"], text=True)
     assert out.strip() == commit
+
+
+def test_editable_dependencies_are_checked(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from [[ package_name ]].tracking import provenance
+
+    monkeypatch.setattr(provenance, "editable_dependencies", lambda: {"dep": git_repo})
+    commits = provenance.require_clean_dependencies("pilot")
+    assert commits == {"dep": git_state(git_repo).commit}
+    with pytest.raises(DirtyTreeError, match="git-pinned"):
+        provenance.require_clean_dependencies("confirm")
+    (git_repo / "code.py").write_text("x = 3\n")
+    with pytest.raises(DirtyTreeError, match="uncommitted"):
+        provenance.require_clean_dependencies("pilot")
+
+
+def test_no_editable_dependencies_in_a_plain_project() -> None:
+    from [[ package_name ]].tracking.provenance import editable_dependencies
+
+    assert editable_dependencies() == {}  # the project itself is excluded

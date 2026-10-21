@@ -29,7 +29,7 @@ from hydra.core.override_parser.overrides_parser import OverridesParser
 
 from ..utils.env import PACKAGE, PREFIX, repo_root, runs_root, var
 from .logbook import check_gate
-from .provenance import git, git_state, require_clean, tag
+from .provenance import git, git_state, require_clean, require_clean_dependencies, tag
 from .sink import member_status
 
 
@@ -82,6 +82,7 @@ def plan(
     experiment = experiment_of(overrides)
     check_gate(log_dir, experiment, stage)
     state = git_state() if allow_dirty else require_clean()
+    editable = {} if allow_dirty else require_clean_dependencies(stage)
     members = expand(overrides) if kind == "grid" else []
     if single and len(members) != 1:
         raise ValueError(f"`run` takes one configuration, these overrides give {len(members)}; use `sweep`")
@@ -103,6 +104,7 @@ def plan(
         "tag": tag_name,
         "allow_dirty": allow_dirty,
         "dirty_paths": list(state.dirty_paths),
+        "editable_dependencies": editable,  # {name: commit}: not frozen by the worktree, see provenance.py
         "host": socket.gethostname(),
         "created": dt.datetime.now().isoformat(timespec="seconds"),
         "n_members": len(members),

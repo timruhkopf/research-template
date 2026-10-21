@@ -102,6 +102,7 @@ def snapshot(sweep_dir: Path, out_root: Path | None = None, curve_points: int = 
                 "created",
             )
         },
+        "editable_dependencies": meta.get("editable_dependencies", {}),
         "status_counts": counts(sweep_dir),
         "first_start": iso(min(starts)) if starts else None,
         "last_end": iso(max(ends)) if ends else None,

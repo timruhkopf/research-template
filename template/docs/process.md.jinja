@@ -470,6 +470,11 @@ Every reportable number traces to **commit + config + environment + data + seed*
   then harmless, and branches can be deleted freely. They are annotated and `just setup` sets
   `push.followTags`, so `git push` carries them to GitHub.
 - **Environment.** `uv.lock` is committed, so the commit pins the environment.
+- **Editable dependencies** (another local checkout installed with `uv add --editable`, e.g. a shared model
+  library under development) are outside this repo's commit and `uv.lock`. Tracked runs refuse them
+  if they have uncommitted changes, and record their commit in `sweep.json` and the notebook header.
+  `confirm` and `final` refuse them altogether: point `[tool.uv.sources]` at a git tag first. Note that
+  the frozen worktree does not freeze an editable dependency's code.
 - **Frozen inputs.** Pin checkpoints and other external artifacts by sha256 in their config and verify it
   at load. Read training history and settings from the checkpoint itself, not from the config that claims
   to describe it.

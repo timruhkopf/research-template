@@ -43,6 +43,7 @@ def provenance_md(snap: Snapshot) -> str:
             ("sweep", f"`{m['id']}`"),
             ("commit", f"`{m['commit'][:12]}`" + (f" (tag `{m['tag']}`)" if m.get("tag") else "")),
             ("backend / host", f"{m['backend']} / {m['host']}"),
+            *[(f"editable dep `{k}`", f"`{v[:12]}`") for k, v in m.get("editable_dependencies", {}).items()],
             ("ran", f"{m.get('first_start')} → {m.get('last_end')}"),
             ("members", f"{total}: {status}"),
             ("compute", f"{_hours(m['wall_h'])} wall, {_hours(m['device_h'])} GPU"),
