@@ -1,0 +1,15 @@
+name: toy_train
+data: {n: 512, dim: 8, noise: 0.05, batch_size: 64}
+model:
+  _target_: [[ package_name ]].models.mlp.MLP
+  in_dim: ${task.data.dim}
+  hidden: 32
+  out_dim: 1
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.01
+max_steps: 200
+ckpt_every: 50
+log_every: 10
+eval_split: val

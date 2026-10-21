@@ -1,0 +1,5 @@
+# Machine-specific roots come from .env; defaults are inside the repo.
+root: ${repo_root:}
+runs: ${oc.env:[[ package_name|upper ]]_RUNS_ROOT,${repo_root:}/runs}
+data: ${oc.env:[[ package_name|upper ]]_DATA_ROOT,${repo_root:}/data}
+checkpoints: ${oc.env:[[ package_name|upper ]]_CKPT_ROOT,${repo_root:}/checkpoints}

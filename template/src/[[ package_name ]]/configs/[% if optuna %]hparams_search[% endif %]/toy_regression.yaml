@@ -1,0 +1,8 @@
+# Search space for `just optuna-create <backend> <stage> --search toy_regression experiment=...`
+metric: final/eval_mse
+direction: minimize
+n_trials: 20
+seed: 0
+search_space:
+  task.lr: {type: float, low: 1.0e-3, high: 0.2, log: true}
+  task.steps: {type: int, low: 20, high: 300}

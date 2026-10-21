@@ -1,0 +1,49 @@
+"""Example training pipeline (replace it): an MLP on synthetic data, resumable from last.ckpt."""
+
+from pathlib import Path
+
+import hydra
+import torch
+from omegaconf import DictConfig
+
+from ..data.splits import check_split
+from ..models.mlp import mse
+from ..tracking.sink import Run
+from ..training.callbacks import Checkpoint, LogMetrics
+from ..training.loop import evaluate, fit
+from ..utils.seeding import seed_everything
+
+
+def toy_train(cfg: DictConfig, run: Run) -> float:
+    t = cfg.task
+    check_split(t.eval_split, cfg.stage)
+    seed_everything(cfg.seed)
+    g = torch.Generator().manual_seed(cfg.seed)
+    w = torch.randn(t.data.dim, 1, generator=g)
+    x = torch.randn(2 * t.data.n, t.data.dim, generator=g)
+    y = torch.tanh(x @ w) + t.data.noise * torch.randn(2 * t.data.n, 1, generator=g)
+    x_train, y_train = x[: t.data.n], y[: t.data.n]
+
+    def batch_at(step: int) -> tuple[torch.Tensor, torch.Tensor]:
+        idx = torch.randint(
+            0, t.data.n, (t.data.batch_size,), generator=torch.Generator().manual_seed(cfg.seed * 1_000_003 + step)
+        )
+        return x_train[idx], y_train[idx]
+
+    fabric = hydra.utils.instantiate(cfg.runtime.fabric)
+    fabric.seed_everything(cfg.seed)
+    model = hydra.utils.instantiate(t.model)
+    callbacks = [LogMetrics(run, t.log_every), Checkpoint(Path(run.dir) / "last.ckpt", t.ckpt_every)]
+    state = fit(
+        model,
+        hydra.utils.instantiate(t.optimizer),
+        mse,
+        batch_at,
+        fabric=fabric,
+        max_steps=t.max_steps,
+        ckpt_path=Path(run.dir) / "last.ckpt",
+        callbacks=callbacks,
+    )
+    eval_loss = evaluate(model, mse, (x[t.data.n :], y[t.data.n :]), fabric)
+    run.log_summary(**{"final/train_loss": state.loss, "final/eval_loss": eval_loss})
+    return eval_loss

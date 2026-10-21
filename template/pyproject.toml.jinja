@@ -1,0 +1,93 @@
+[% set v = python.split('.') %]
+[project]
+name = "[[ project_name ]]"
+version = "0.1.0"  # bumped by hand at milestones; the code behind a paper is a git tag
+description = "[[ description ]]"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "[[ author ]]", email = "[[ email ]]" }]
+requires-python = ">=[[ v[0] ]].[[ v[1] ]],<[[ v[0] ]].[[ v[1]|int + 1 ]]"
+dependencies = [
+    "hydra-core>=1.3.2",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "pyyaml>=6",
+    "jaxtyping>=0.2.36",
+[% if mlflow %]
+    "mlflow>=3.1",
+[% endif %]
+[% if optuna %]
+    "optuna>=4.2",
+[% endif %]
+[% if training %]
+    "lightning>=2.5",
+[% endif %]
+]
+
+# torch is NOT a plain dependency: the CPU vs CUDA build is a per-machine choice. ALWAYS pass one extra
+# (a bare `uv sync` can silently resolve some default torch wheel):
+#   uv sync --extra cpu          # laptop, CI
+#   uv sync --extra [[ cuda_extra ]]       # GPU machines (driver must support it)
+[project.optional-dependencies]
+cpu = ["torch>=2.5"]
+[[ cuda_extra ]] = ["torch>=2.5"]
+
+[project.scripts]
+[[ package_name ]] = "[[ package_name ]].main:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "hypothesis>=6.100", "beartype>=0.19", "ruff>=0.6", "pyright[nodejs]>=1.1.380", "pre-commit>=3.7,<4.7"]  # 4.7 needs git >= 2.31
+notebooks = ["jupyterlab>=4", "ipykernel>=6.29", "nbconvert>=7.16", "matplotlib>=3.8", "nbstripout>=0.7"]
+
+[tool.uv]
+default-groups = ["dev"]
+conflicts = [[ '[[' ]]{ extra = "cpu" }, { extra = "[[ cuda_extra ]]" }[[ ']]' ]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-[[ cuda_extra ]]", extra = "[[ cuda_extra ]]" },
+]
+
+[[ '[[' ]]tool.uv.index[[ ']]' ]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[ '[[' ]]tool.uv.index[[ ']]' ]]
+name = "pytorch-[[ cuda_extra ]]"
+url = "https://download.pytorch.org/whl/[[ cuda_extra ]]"
+explicit = true
+
+[build-system]
+requires = ["uv_build>=0.8.17,<1"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "[[ package_name ]]"
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["notebooks", "*.md"]  # code blocks in docs are illustrations
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "NPY", "PT"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # unicode arrows etc. in strings and comments are fine
+    "F722",                        # jaxtyping shape strings ("batch dim") are not forward references
+    "PT011", "PT018",              # compound asserts / broad raises are fine in research tests
+]
+
+[tool.pyright]  # basic mode, core only: see docs/process.md, Typing
+include = ["src"]
+exclude = ["src/[[ package_name ]]/experimental"]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: takes more than a few seconds", "gpu: needs CUDA"]
+# shape/type annotations of the whole package are checked at runtime during tests (jaxtyping + beartype)
+addopts = "-ra -m 'not slow and not gpu' --jaxtyping-packages=[[ package_name ]],beartype.beartype"
+filterwarnings = ["ignore::beartype.roar.BeartypeDecorHintPep585DeprecationWarning"]  # from omegaconf hints

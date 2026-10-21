@@ -1,0 +1,96 @@
+# Research repository template. Usage:
+#   uvx copier copy ~/PycharmProjects/research-template myproject
+#   cd myproject && uvx copier update          # later: merge template improvements
+_subdirectory: template
+_answers_file: .copier-answers.yml
+_min_copier_version: "9.0"
+
+# [[ ]] / [% %] instead of {{ }} / {% %}: justfiles and GitHub Actions use {{ }} themselves.
+_envops:
+  block_start_string: "[%"
+  block_end_string: "%]"
+  variable_start_string: "[["
+  variable_end_string: "]]"
+  comment_start_string: "[#"
+  comment_end_string: "#]"
+  keep_trailing_newline: true
+  trim_blocks: true    # a line holding only a [% %] tag disappears entirely
+  lstrip_blocks: true
+
+# Project-owned files: created once, never overwritten by `copier update`.
+_skip_if_exists:
+  - README.md
+  - CLAUDE.md
+  - project.just
+  - CITATION.cff
+  - references.md
+  - references.bib
+  - research_log/**
+  - envs/*.example
+  - "src/*/configs/experiment/**"
+  - "src/*/tasks/**"
+  - "src/*/evaluation/metric_names.py"
+
+project_name:
+  type: str
+  help: Project (repository) name
+  validator: "[% if not project_name %]required[% endif %]"
+
+package_name:
+  type: str
+  help: Python package name (also the CLI name and the env-var prefix)
+  default: "[[ project_name|lower|replace('-', '_')|replace(' ', '_') ]]"
+  validator: >-
+    [% if not (package_name | regex_search('^[a-z][a-z0-9_]*$')) %]lowercase letters, digits, underscores[% endif %]
+
+description:
+  type: str
+  help: One sentence - what question does this project answer?
+  default: "TODO: one sentence on the question this repository answers."
+
+author:
+  type: str
+  help: Author name
+
+email:
+  type: str
+  help: Author email
+
+github_user:
+  type: str
+  help: GitHub user or organisation (for badges and URLs)
+  default: "[[ author|lower|replace(' ', '') ]]"
+
+python:
+  type: str
+  help: Python version
+  default: "3.12"
+
+cuda_extra:
+  type: str
+  help: GPU torch extra (next to `cpu`), e.g. cu126; must match the GPU machines' driver
+  default: cu126
+
+compute:
+  type: str
+  help: Where tracked runs execute (local is always available)
+  multiselect: true
+  choices:
+    remote (ssh box without a scheduler): remote
+    slurm: slurm
+  default: [remote]
+
+mlflow:
+  type: bool
+  help: Optional MLflow viewer fed from the run sinks?
+  default: true
+
+optuna:
+  type: bool
+  help: Optuna worker-pool hyperparameter search?
+  default: false
+
+training:
+  type: bool
+  help: Lightning-Fabric training loop with checkpoint/resume?
+  default: false

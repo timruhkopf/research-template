@@ -1,0 +1,16 @@
+#!/bin/bash
+# One SLURM array element: `member <sweep dir>` runs member $SLURM_ARRAY_TASK_ID of a grid sweep,
+# `optuna-worker <sweep dir>` runs one study worker. On USR1 (time limit near) the member checkpoints
+# (if it can), and this element requeues itself; members without checkpoints simply start over.
+set -uo pipefail
+cd "$(dirname "$0")/../.." || exit 1
+set -a
+[ -f .env ] && . ./.env
+[ -f .env.secrets ] && . ./.env.secrets
+set +a
+mode=$1 dir=$2
+if [ "$mode" = member ]; then args=(member "$dir" "$SLURM_ARRAY_TASK_ID"); else args=(optuna-worker "$dir"); fi
+.venv/bin/python -m [[ package_name ]].tracking.cli "${args[@]}" &
+child=$!
+trap 'kill -USR1 "$child" 2>/dev/null; wait "$child"; scontrol requeue "${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"; exit 0' USR1
+wait "$child"

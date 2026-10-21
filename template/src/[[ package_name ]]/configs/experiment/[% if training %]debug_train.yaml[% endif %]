@@ -1,0 +1,9 @@
+# @package _global_
+# Smoke test of the training loop: a few steps on CPU.
+defaults:
+  - override /task: toy_train
+
+task:
+  max_steps: 20
+  ckpt_every: 10
+  log_every: 5

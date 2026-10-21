@@ -1,0 +1,48 @@
+"""The training loop resumes exactly: stopping at step k and resuming equals training straight through."""
+
+from pathlib import Path
+
+import pytest
+import torch
+from lightning.fabric import Fabric
+
+from [[ package_name ]].models.mlp import MLP, mse
+from [[ package_name ]].training.callbacks import Checkpoint
+from [[ package_name ]].training.loop import fit
+
+
+def _batch_at(step: int) -> tuple[torch.Tensor, torch.Tensor]:
+    g = torch.Generator().manual_seed(step)
+    x = torch.randn(16, 4, generator=g)
+    return x, x.sum(dim=1, keepdim=True)
+
+
+def _train(ckpt: Path, max_steps: int) -> MLP:
+    torch.manual_seed(0)
+    model = MLP(4, 8, 1)
+    fabric = Fabric(accelerator="cpu", devices=1)
+    fit(
+        model,
+        lambda p: torch.optim.AdamW(p, lr=1e-2),
+        mse,
+        _batch_at,
+        fabric=fabric,
+        max_steps=max_steps,
+        ckpt_path=ckpt,
+        callbacks=[Checkpoint(ckpt, every=5)],
+    )
+    return model
+
+
+def test_resume_is_exact(tmp_path: Path) -> None:
+    straight = _train(tmp_path / "a.ckpt", 20)
+    _train(tmp_path / "b.ckpt", 10)  # "killed" after step 10 (checkpoint at 10)
+    resumed = _train(tmp_path / "b.ckpt", 20)
+    for p, q in zip(straight.parameters(), resumed.parameters(), strict=True):
+        torch.testing.assert_close(p, q)
+
+
+def test_shape_annotations_are_checked() -> None:
+    """jaxtyping + beartype are active in tests: a wrong input width fails at the call."""
+    with pytest.raises(Exception, match=r"in_dim|batch|shape|Type-check"):
+        MLP(4, 8, 1)(torch.randn(3, 5))

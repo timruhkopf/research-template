@@ -1,0 +1,20 @@
+"""Pipeline registry: `task.name` in the config selects the function."""
+
+from collections.abc import Callable
+
+from omegaconf import DictConfig
+
+from ..tracking.sink import Run
+from .toy_regression import toy_regression
+[% if training %]
+from .toy_train import toy_train
+[% endif %]
+
+Pipeline = Callable[[ '[[' ]]DictConfig, Run], float | None]
+
+TASKS: dict[str, Pipeline] = {
+    "toy_regression": toy_regression,
+[% if training %]
+    "toy_train": toy_train,
+[% endif %]
+}

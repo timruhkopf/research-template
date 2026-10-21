@@ -1,0 +1,123 @@
+"""Optuna as a worker pool: the study (a journal file in the sweep dir) is the coordinator, not a process.
+
+Each trial is an ordinary sweep member (same sink, status and snapshot), so HPO sweeps are analysed
+like grid sweeps. Workers run trials until the budget is used or their wall time runs low, then exit.
+No in-process pruning: each trial is a separate process, which is what makes it requeue-safe.
+"""
+
+import datetime as dt
+import json
+import os
+import subprocess
+import time
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+import optuna
+from omegaconf import OmegaConf
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend, JournalFileOpenLock
+from optuna.trial import TrialState
+
+from .sink import read_run
+from .sweep import add_job, plan, read_sweep, run_member
+
+SEARCH_DIR = Path(__file__).resolve().parents[1] / "configs" / "hparams_search"
+ACTIVE = (TrialState.COMPLETE, TrialState.PRUNED, TrialState.RUNNING, TrialState.WAITING)
+
+
+def _storage(sweep_dir: Path) -> JournalStorage:
+    path = str(sweep_dir / "study.journal")
+    return JournalStorage(JournalFileBackend(path, lock_obj=JournalFileOpenLock(path)))  # safe on NFS
+
+
+def _load(sweep_dir: Path) -> tuple[optuna.Study, dict[str, Any]]:
+    search = json.loads((sweep_dir / "study.json").read_text())
+    return optuna.load_study(study_name=read_sweep(sweep_dir)["id"], storage=_storage(sweep_dir)), search
+
+
+def create(stage: str, overrides: Sequence[str], search_name: str, **plan_kwargs: Any) -> Path:
+    search = OmegaConf.to_container(OmegaConf.load(SEARCH_DIR / f"{search_name}.yaml"), resolve=True)
+    assert isinstance(search, dict)
+    sweep_dir = plan(stage, overrides, kind="optuna", **plan_kwargs)
+    (sweep_dir / "study.json").write_text(json.dumps({"name": search_name, **search}, indent=1))
+    sampler = optuna.samplers.TPESampler(seed=search.get("seed", 0), constant_liar=True)  # parallel workers
+    optuna.create_study(
+        study_name=sweep_dir.name, storage=_storage(sweep_dir), sampler=sampler, direction=search["direction"]
+    )
+    return sweep_dir
+
+
+def _suggest(trial: optuna.Trial, space: dict[str, dict[str, Any]]) -> list[str]:
+    overrides = []
+    for key, spec in space.items():
+        kind = spec["type"]
+        if kind == "float":
+            v = trial.suggest_float(key, spec["low"], spec["high"], log=spec.get("log", False))
+        elif kind == "int":
+            v = trial.suggest_int(key, spec["low"], spec["high"], log=spec.get("log", False))
+        else:
+            v = trial.suggest_categorical(key, spec["choices"])
+        overrides.append(f"{key}={v}")
+    return overrides
+
+
+def _remaining_s() -> float:
+    """Wall time left in this SLURM allocation (inf outside SLURM)."""
+    job = os.environ.get("SLURM_JOB_ID")
+    if not job:
+        return float("inf")
+    left = subprocess.check_output(["squeue", "-h", "-j", job, "-o", "%L"], text=True).strip()
+    days, _, hms = left.rpartition("-")
+    parts = [int(x) for x in hms.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    return int(days or 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+
+def worker(sweep_dir: Path) -> None:
+    study, search = _load(sweep_dir)
+    base = read_sweep(sweep_dir)["overrides"]
+    deadline = time.time() + _remaining_s()
+    longest = 0.0
+    while True:
+        if len(study.get_trials(deepcopy=False, states=ACTIVE)) >= search["n_trials"]:
+            break  # may overshoot by (workers - 1) trials when workers ask at the same moment
+        if time.time() + 1.5 * longest > deadline:
+            break  # not enough time for another trial in this allocation
+        trial = study.ask()
+        add_job(sweep_dir, trial.number, [*base, *_suggest(trial, search["search_space"])])
+        t0 = time.time()
+        rc = run_member(sweep_dir, trial.number)
+        longest = max(longest, time.time() - t0)
+        value = read_run(sweep_dir / str(trial.number)).get("summary", {}).get(search["metric"])
+        if rc == 0 and value is not None:
+            study.tell(trial, value)
+        else:
+            study.tell(trial, state=TrialState.FAIL)
+        print(f"{dt.datetime.now():%F %T} trial {trial.number}: rc={rc} {search['metric']}={value}", flush=True)
+
+
+def study_status(sweep_dir: Path) -> str:
+    study, search = _load(sweep_dir)
+    trials = study.get_trials(deepcopy=False)
+    counts = {s.name: sum(t.state == s for t in trials) for s in TrialState if any(t.state == s for t in trials)}
+    best = ""
+    if any(t.state == TrialState.COMPLETE for t in trials):
+        best = f"\nbest: trial {study.best_trial.number} {search['metric']}={study.best_value:.6g} {study.best_params}"
+    return f"{len(trials)}/{search['n_trials']} trials: {counts}{best}"
+
+
+def reap(sweep_dir: Path, stale_h: float, now: dt.datetime | None = None) -> int:
+    """Mark RUNNING trials older than stale_h as FAIL and re-enqueue their params. Run by hand: one writer."""
+    study, _ = _load(sweep_dir)
+    storage = study._storage
+    now = now or dt.datetime.now()
+    n = 0
+    for t in study.get_trials(deepcopy=False, states=(TrialState.RUNNING,)):
+        if t.datetime_start and (now - t.datetime_start).total_seconds() > stale_h * 3600:
+            storage.set_trial_state_values(t._trial_id, TrialState.FAIL)
+            study.enqueue_trial(t.params, skip_if_exists=False)
+            n += 1
+    return n
