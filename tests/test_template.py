@@ -32,6 +32,7 @@ def test_rendered_project(name: str, tmp_path: Path) -> None:
     answers = [arg for k, v in data.items() for arg in ("-d", f"{k}={v}")]
     sh(["copier", "copy", "--trust", "--defaults", "--vcs-ref=HEAD", *answers, str(TEMPLATE), str(dst)], tmp_path)
     assert not list(dst.rglob("*.jinja")), "unrendered files"
+    assert (dst / "research_log" / "deferred.md").exists()
 
     git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=t"]
     sh(["git", "init", "-q"], dst)
